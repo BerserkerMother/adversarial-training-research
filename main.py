@@ -79,7 +79,7 @@ def main():
         torch.save(checkpoint, './checkpoint%d.pth' % i)
 
         print('Epoch %d, train accuracy: %.2f%% | test accuracy: %.2f%%'
-              % (i, test_accuracy * 100, accuracy_train * 100))
+              % (i, accuracy_train * 100, test_accuracy * 100))
 
 
 def evaluate(network, loader):
