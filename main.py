@@ -59,7 +59,7 @@ def main():
             images, targets = images.to(device), targets.to(device)
 
             with amp.autocast():
-                outputs = network(images)
+                outputs, _ = network(images)
                 loss = F.cross_entropy(outputs, targets)
 
             optimizer.zero_grad()

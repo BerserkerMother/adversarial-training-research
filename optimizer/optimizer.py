@@ -103,7 +103,7 @@ class ScheduledOptim():
 
 
 class Cosine_Warmup_Wrapper:
-    def __init__(self, optimizer, lr: float, total_steps: int = 4000):
+    def __init__(self, optimizer, lr: float, total_steps: int = 10000):
         self.optimizer = optimizer
         self.total_steps = total_steps
         self.current_step = 0
