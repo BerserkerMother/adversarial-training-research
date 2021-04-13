@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 
 from models.transformer import TransformerEncoder
+from optimizer.optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -37,6 +38,7 @@ def main():
 
     network = TransformerEncoder().to(device)
     optimizer = torch.optim.Adam(network.parameters(), lr=1e-4)
+    optimizer = Cosine_Warmup_Wrapper(optimizer=optimizer, d_model=network.hidden_size)
 
     num_parameters = 0
     for param in network.parameters():
@@ -64,7 +66,8 @@ def main():
             total_loss += loss.item()
 
             if k % print_freq == 0 and k != 0:
-                print("Epoch %2d [%4d/%4d] | Loss: %.4f" % (i, k, len(data) / B, total_loss))
+                print("Epoch %2d [%4d/%4d] | Loss: %.4f | lr: %.6f"
+                      % (i, k, len(data) / B, total_loss, optimizer.get_current_lr()[0]))
                 total_loss = 0
 
         accuracy_train = evaluate(network, data_loader)

@@ -1,4 +1,5 @@
 import numpy as np
+import math
 
 
 class Linear_Warmup_Wrapper:
@@ -8,18 +9,18 @@ class Linear_Warmup_Wrapper:
         self.max_lr = max_lr
         self.total_steps = 1000
 
-        self.current_steps = 0.
+        self.current_step = 0.
 
     def zero_grad(self):
         self.optimizer.zero_grad()
 
     def update_lr(self):
-        if self.current_steps < self.warmup_steps:
-            lr = self.current_steps / self.warmup_steps * self.max_lr
+        if self.current_step < self.warmup_steps:
+            lr = self.current_step / self.warmup_steps * self.max_lr
         else:
-            lr = (1 - (self.current_steps / self.total_steps)) * self.max_lr
+            lr = (1 - (self.current_step / self.total_steps)) * self.max_lr
 
-        self.current_steps += 1
+        self.current_step += 1
 
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
@@ -39,19 +40,20 @@ class Linear_Warmup_Wrapper:
         return {
             'optimizer': self.optimizer.state_dict(),
             'warm_steps': self.warmup_steps,
-            'current_steps': self.current_steps
+            'current_steps': self.current_step
         }
 
     def load_state_dict(self, state_dict):
         self.optimizer = state_dict['optimizer']
         self.warmup_steps = state_dict['warm_steps']
-        self.current_steps = state_dict['current_steps']
+        self.current_step = state_dict['current_steps']
 
 
 class ScheduledOptim():
+    # code from attention is all you implementation
     '''A simple wrapper class for learning rate scheduling'''
 
-    def __init__(self, optimizer, d_model, n_warmup_steps=400):
+    def __init__(self, optimizer, d_model, n_warmup_steps=1000):
         self._optimizer = optimizer
         self.n_warmup_steps = n_warmup_steps
         self.n_current_steps = 0
@@ -80,9 +82,12 @@ class ScheduledOptim():
         for param_group in self._optimizer.param_groups:
             param_group['lr'] = lr
 
-    def get_lr(self):
+    def get_current_lr(self):
+        lrS = []
         for param_group in self._optimizer.param_groups:
-            return param_group['lr']
+            lrS.append(param_group['lr'])
+
+        return lrS
 
     def state_dict(self):
         return {
@@ -95,3 +100,48 @@ class ScheduledOptim():
         self._optimizer = state_dict['optimizer']
         self.n_current_steps = state_dict['warm_steps']
         self.n_current_steps = state_dict['current_steps']
+
+
+class Cosine_Warmup_Wrapper:
+    def __init__(self, optimizer, d_model: int = 1024, warmup_steps: int = 1000, total_steps: int = 4000):
+        self.optimizer = optimizer
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.current_step = 0
+
+        self.init_lr = np.sqrt(d_model)
+
+    def zero_grad(self):
+        self.optimizer.zero_grad()
+
+    def step(self):
+        scale = self.get_lr_scale()
+
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = self.init_lr * scale
+
+        self.optimizer.step()
+        self.current_step += 1
+
+    def get_lr_scale(self):
+        if self.warmup_steps < self.current_step:
+            scale = 1 - (.5 * (math.cos(self.current_step / self.warmup_steps * math.pi) + 1))
+        else:
+            current = self.current_step - self.warmup_steps
+            total = self.total_steps - self.warmup_steps
+
+            scale = .5 * (math.cos(current / total * math.pi) + 1)
+
+        return scale
+
+    def state_dict(self):
+        return {
+            'optimizer': self.optimizer.state_dict(),
+            'warm_steps': self.warmup_steps,
+            'current_steps': self.current_step
+        }
+
+    def load_state_dict(self, state_dict):
+        self.optimizer = state_dict['optimizer']
+        self.warmup_steps = state_dict['warm_steps']
+        self.current_step = state_dict['current_steps']
