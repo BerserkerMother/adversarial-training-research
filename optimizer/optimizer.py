@@ -103,16 +103,11 @@ class ScheduledOptim():
 
 
 class Cosine_Warmup_Wrapper:
-    def __init__(self, optimizer, d_model: int = 1024, warmup_steps: int = 1000, total_steps: int = 4000):
+    def __init__(self, optimizer, lr: float, total_steps: int = 4000):
         self.optimizer = optimizer
-        self.warmup_steps = warmup_steps
         self.total_steps = total_steps
         self.current_step = 0
-
-        self.init_lr = np.sqrt(d_model)
-
-    def zero_grad(self):
-        self.optimizer.zero_grad()
+        self.init_lr = lr
 
     def step(self):
         scale = self.get_lr_scale()
@@ -120,28 +115,24 @@ class Cosine_Warmup_Wrapper:
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = self.init_lr * scale
 
-        self.optimizer.step()
         self.current_step += 1
 
     def get_lr_scale(self):
-        if self.warmup_steps < self.current_step:
-            scale = 1 - (.5 * (math.cos(self.current_step / self.warmup_steps * math.pi) + 1))
-        else:
-            current = self.current_step - self.warmup_steps
-            total = self.total_steps - self.warmup_steps
-
-            scale = .5 * (math.cos(current / total * math.pi) + 1)
+        scale = .5 * (math.cos(self.current_step / self.total_steps * math.pi) + 1)
 
         return scale
 
+    def get_current_lr(self):
+        lrS = []
+        for param_group in self.optimizer.param_groups:
+            lrS.append(param_group['lr'])
+
+        return lrS
+
     def state_dict(self):
         return {
-            'optimizer': self.optimizer.state_dict(),
-            'warm_steps': self.warmup_steps,
             'current_steps': self.current_step
         }
 
     def load_state_dict(self, state_dict):
-        self.optimizer = state_dict['optimizer']
-        self.warmup_steps = state_dict['warm_steps']
         self.current_step = state_dict['current_steps']

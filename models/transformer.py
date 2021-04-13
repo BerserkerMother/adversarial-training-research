@@ -195,6 +195,8 @@ class MLP(nn.Module):
         self.fc_last = nn.Linear(hidden_size, out_size)
         self.drop_last = nn.Dropout(p=dropout)
 
+        self.init_weights()
+
     def init_weights(self):
         for module in self.fc_layers.modules():
             if isinstance(module, nn.Linear):

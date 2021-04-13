@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
+from torch.cuda import amp
 
 from models.transformer import TransformerEncoder
 from optimizer.optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
@@ -38,7 +39,8 @@ def main():
 
     network = TransformerEncoder().to(device)
     optimizer = torch.optim.Adam(network.parameters(), lr=1e-4)
-    optimizer = Cosine_Warmup_Wrapper(optimizer=optimizer, d_model=network.hidden_size)
+    scheduler = Cosine_Warmup_Wrapper(optimizer=optimizer, lr=1e-3)
+    scaler = amp.GradScaler()
 
     num_parameters = 0
     for param in network.parameters():
@@ -56,18 +58,21 @@ def main():
             B = data_loader.batch_size
             images, targets = images.to(device), targets.to(device)
 
-            outputs = network(images)
-            loss = F.cross_entropy(outputs, targets)
+            with amp.autocast():
+                outputs = network(images)
+                loss = F.cross_entropy(outputs, targets)
 
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scheduler.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             total_loss += loss.item()
 
             if k % print_freq == 0 and k != 0:
                 print("Epoch %2d [%4d/%4d] | Loss: %.4f | lr: %.6f"
-                      % (i, k, len(data) / B, total_loss, optimizer.get_current_lr()[0]))
+                      % (i, k, len(data) / B, total_loss, scheduler.get_current_lr()[0]))
                 total_loss = 0
 
         accuracy_train = evaluate(network, data_loader)
@@ -79,7 +84,7 @@ def main():
             'acc': test_accuracy
         }
 
-        torch.save(checkpoint, './checkpoint%d.pth' % i)
+        torch.save(checkpoint, './checkpoint.pth')
 
         print('Epoch %d, train accuracy: %.2f%% | test accuracy: %.2f%%'
               % (i, accuracy_train * 100, test_accuracy * 100))
