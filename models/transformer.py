@@ -26,6 +26,9 @@ class TransformerEncoder(nn.Module):
         self.num_encoder_layers = num_encoder_layers
         self.num_classes = num_classes
 
+        # list to store attention weights for visualizing purposes
+        self.attn_weights = []
+
         # check to see if we can break image to N tiles
         self.N = int(math.pow(div_term, 2))  # N aka number of tiles
         assert image_size % self.N == 0
@@ -38,10 +41,13 @@ class TransformerEncoder(nn.Module):
         # define class learnable class token
         self.cls_token = nn.Parameter(torch.zeros((1, 1, hidden_size)))
 
+        self.embedding_dropout = nn.Dropout(p=dropout)
+
         # define encoder layers
         layer = TransformerEncoderLayer(input_size=self.num_input_features, hidden_size=hidden_size,
                                         num_head=num_head, attention_size=attention_size,
-                                        num_mlp_layers=num_mlp_layers, N=self.N, dropout=dropout).to(device)
+                                        num_mlp_layers=num_mlp_layers, N=self.N, dropout=dropout,
+                                        attn_weights=self.attn_weights).to(device)
 
         encoder_layers = []
         for _ in range(num_encoder_layers):
@@ -57,11 +63,10 @@ class TransformerEncoder(nn.Module):
         """
 
         :param x: image tensor of size (B, C, H, W)
-        :return: prediction for each class of size (B, num_classes)
+        :return: prediction for each class of size (B, num_classes) & attention weights of all layers
         """
 
         B = x.size(0)
-        x = x.view(B, self.N, -1)
         cls_token = self.cls_token.expand(B, 1, self.hidden_size)
 
         # apply embedding to image
@@ -70,19 +75,24 @@ class TransformerEncoder(nn.Module):
         x = torch.cat([cls_token, x], dim=1)
         # apply positional embedding
         x = x + self.pos_embedding
+        x = self.embedding_dropout(x)
 
-        x = self.encoder_layers(x)
-        x = self.mlp(x)
+        attn_weights = []
+        for layer in self.encoder_layers:
+            x = layer(x, attn_weights)
+
+        x = self.mlp(x[0])
         # we only going to need class token output
         x = x[:, 1, :]  # x is of size (B, 1, num_classes)
 
-        return x.view(B, -1)
+        return x.view(B, -1), attn_weights
 
 
 class TransformerEncoderLayer(nn.Module):
     def __init__(self, input_size: int = 363, hidden_size: int = 768,
                  num_head: int = 12, attention_size: int = 768,
-                 num_mlp_layers: int = 2, N: int = 9, dropout: float = .2):
+                 num_mlp_layers: int = 2, N: int = 9, dropout: float = .2,
+                 attn_weights: list = []):
         super(TransformerEncoderLayer, self).__init__()
 
         self.input_size = input_size
@@ -92,6 +102,7 @@ class TransformerEncoderLayer(nn.Module):
         self.dropout = dropout
         self.num_mlp_layers = num_mlp_layers
         self.N = N
+        self.attn_weights = attn_weights  # to store attention weight across layers
 
         self.multi_head_attention = Multi_Head_Attention(hidden_size=hidden_size, num_head=num_head,
                                                          attention_size=hidden_size, dropout=dropout).to(device)
@@ -101,17 +112,19 @@ class TransformerEncoderLayer(nn.Module):
         self.norm1 = nn.LayerNorm(hidden_size, eps=1e-6)
         self.norm2 = nn.LayerNorm(hidden_size, eps=1e-6)
 
-    def forward(self, x):
+    def forward(self, x, attn_weights=None):
         """
 
-        :param x: encoder layer input of size (B, N, hidden_size)
+        :param x: tuple of encoder layer input of size (B, N, hidden_size) & list of attention weights
         :return:
         """
+        if len(attn_weights) != 0:
+            x, attn_weights = x
 
         # attention part
         x1 = x
         x1 = self.norm1(x1)
-        x1, _ = self.multi_head_attention(x1)
+        x1, weights = self.multi_head_attention(x1)
         x = x + x1
 
         # mlp part
@@ -120,7 +133,8 @@ class TransformerEncoderLayer(nn.Module):
         x1 = self.mlp(x1)
         x = x + x1
 
-        return x
+        attn_weights.append(weights.cpu())
+        return x, attn_weights
 
 
 class Multi_Head_Attention(nn.Module):
@@ -142,6 +156,8 @@ class Multi_Head_Attention(nn.Module):
 
         self.attention_dropout = nn.Dropout(p=dropout)
         self.projection_dropout = nn.Dropout(p=dropout)
+
+        self.init_weights()
 
     def forward(self, x: Tensor):
         """
@@ -171,11 +187,21 @@ class Multi_Head_Attention(nn.Module):
 
         # reshape to original size
         new_values = new_values.permute(0, 2, 1, 3).contiguous().view(B, N, -1)
-        weights = weights.view(B, N, -1)
 
         output = self.projection_dropout(self.linear_projection(new_values))
 
         return output, weights
+
+    def init_weights(self):
+        nn.init.xavier_uniform_(self.Q.weight)
+        nn.init.xavier_uniform_(self.K.weight)
+        nn.init.xavier_uniform_(self.V.weight)
+        nn.init.xavier_uniform_(self.linear_projection.weight)
+
+        nn.init.normal_(self.Q.bias, std=1e-6)
+        nn.init.normal_(self.K.bias, std=1e-6)
+        nn.init.normal_(self.V.bias, std=1e-6)
+        nn.init.normal_(self.linear_projection.bias, std=1e-6)
 
 
 class MLP(nn.Module):
