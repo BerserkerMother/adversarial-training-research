@@ -9,6 +9,7 @@ from torch.cuda import amp
 
 from models.transformer import TransformerEncoder
 from optimizer.optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
+from data.transform import ToTiles
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -17,7 +18,8 @@ def main():
     T = [
         transforms.Resize(36),
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261))
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)),
+        ToTiles(image_size=36, num_tile=9)
     ]
 
     data = datasets.CIFAR10(root='./cifar-10', train=True, download=True, transform=transforms.Compose(T))
@@ -42,12 +44,10 @@ def main():
     scheduler = Cosine_Warmup_Wrapper(optimizer=optimizer, lr=1e-3)
     scaler = amp.GradScaler()
 
-    num_parameters = 0
-    for param in network.parameters():
-        size = param.view(-1).size()[0]
-        num_parameters += size
+    num_parameters = sum(p.numel() for p in network.parameters() if p.requires_grad)
+    num_parameters /= 1000000
 
-    print("Number of parameters %d" % num_parameters)
+    print("Number of parameters %d M" % num_parameters)
     num_epochs = 100
     print_freq = 10
 
@@ -99,7 +99,7 @@ def evaluate(network, loader):
             B = images.size(0)
             images, targets = images.to(device), targets.to(device)
 
-            outputs = network(images)
+            outputs, _ = network(images)
             correct += (outputs.max(1)[1] == targets).sum()
             num += B
 
