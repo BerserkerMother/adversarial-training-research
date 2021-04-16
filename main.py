@@ -8,6 +8,7 @@ from torchvision import transforms, datasets
 from torch.cuda import amp
 
 import os
+import argparse
 
 from models.transformer import TransformerEncoder
 from optimizer.optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
@@ -16,42 +17,44 @@ from data.transform import ToTiles
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
-def main():
+def main(args):
     T = [
-        transforms.Resize(36),
+        transforms.Resize(args.image_size),
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)),
-        ToTiles(image_size=36, num_tile=9)
+        ToTiles(image_size=args.image_size, num_tile=args.div_term * args.div_term)
     ]
 
-    data = datasets.CIFAR10(root='./cifar-10', train=True, download=True, transform=transforms.Compose(T))
-    data_test = datasets.CIFAR10(root='./cifar-10', train=False, download=True, transform=transforms.Compose(T))
+    data = datasets.CIFAR10(root=args.data, train=True, download=True, transform=transforms.Compose(T))
+    data_test = datasets.CIFAR10(root=args.data, train=False, download=True, transform=transforms.Compose(T))
 
     data_loader = DataLoader(
         data,
-        batch_size=512,
+        batch_size=args.batch_size,
         shuffle=True,
         pin_memory=True
     )
 
     test_loader = DataLoader(
         data_test,
-        batch_size=512,
+        batch_size=args.batch_size,
         shuffle=False,
         pin_memory=True
     )
 
-    network = TransformerEncoder().to(device)
-    optimizer = torch.optim.Adam(network.parameters(), lr=1e-4)
-    scheduler = Cosine_Warmup_Wrapper(optimizer=optimizer, lr=1e-4)
+    network = TransformerEncoder(image_size=args.image_size, hidden_size=args.hidden_size, num_head=args.num_heads,
+                                 attention_size=args.attention_size, num_mlp_layers=args.num_mlp_layers,
+                                 num_encoder_layers=args.num_encoder_layers, dropout=args.dropout,
+                                 num_classes=10, div_term=args.div_term).to(device)
+    print(network)
+    optimizer = torch.optim.Adam(network.parameters(), lr=args.lr)
+    scheduler = Cosine_Warmup_Wrapper(optimizer=optimizer, lr=args.lr, total_steps=args.total_steps)
     scaler = amp.GradScaler()
 
     num_parameters = sum(p.numel() for p in network.parameters() if p.requires_grad)
     num_parameters /= 1000000
 
-    print("Number of parameters %d M" % num_parameters)
-    num_epochs = 100
-    print_freq = 10
+    print("Number of parameters %dM" % num_parameters)
 
     e = 0
     if os.path.exists('./checkpoint.pth'):
@@ -62,29 +65,9 @@ def main():
         scaler.load_state_dict(checkpoint['scaler'])
         e = checkpoint['epoch']
 
-    for i in range(e, num_epochs):
-        network.train()
-        total_loss = 0.
-        for k, (images, targets) in enumerate(data_loader):
-            B = data_loader.batch_size
-            images, targets = images.to(device), targets.to(device)
-
-            with amp.autocast():
-                outputs, _ = network(images)
-                loss = F.cross_entropy(outputs, targets)
-
-            optimizer.zero_grad()
-            scaler.scale(loss).backward()
-            scheduler.step()
-            scaler.step(optimizer)
-            scaler.update()
-
-            total_loss += loss.item()
-
-            if k % print_freq == 0 and k != 0:
-                print("Epoch %2d [%4d/%4d] | Loss: %.4f | lr: %.6f"
-                      % (i, k, len(data) / B, total_loss, scheduler.get_current_lr()[0]))
-                total_loss = 0
+    for i in range(e, args.num_epochs):
+        train(args, network=network, data_loader=data_loader, optimizer=optimizer,
+              scaler=scaler, scheduler=scheduler, data=data, e=e)
 
         accuracy_train = evaluate(network, data_loader)
         test_accuracy = evaluate(network, test_loader)
@@ -103,6 +86,34 @@ def main():
               % (i, accuracy_train * 100, test_accuracy * 100))
 
 
+def train(args, network, data_loader, optimizer, scaler, scheduler, data, e):
+    network.train()
+    total_loss = 0.
+    for i in range(e, args.num_epochs):
+        network.train()
+        total_loss = 0.
+        for k, (images, targets) in enumerate(data_loader):
+            B = data_loader.batch_size
+            images, targets = images.to(device), targets.to(device)
+
+            with amp.autocast():
+                outputs, _ = network(images)
+                loss = F.cross_entropy(outputs, targets)
+
+            optimizer.zero_grad()
+            scaler.scale(loss).backward()
+            scheduler.step()
+            scaler.step(optimizer)
+            scaler.update()
+
+            total_loss += loss.item()
+
+            if k % args.print_freq == 0 and k != 0:
+                print("Epoch %2d [%4d/%4d] | Loss: %3.4f | lr: %.6f"
+                      % (i, k, len(data) / B, total_loss, scheduler.get_current_lr()[0]))
+                total_loss = 0
+
+
 def evaluate(network, loader):
     network.eval()
     correct = 0.
@@ -119,4 +130,26 @@ def evaluate(network, loader):
     return correct / num
 
 
-main()
+arg_parser = argparse.ArgumentParser(description='ViT model and Attention visualization')
+# data related args
+arg_parser.add_argument('--data', default='./cifar-10', type=str, help='path to dataset')
+arg_parser.add_argument('--batch_size', default=512, type=int, help='number of samples in a batch')
+# optimizer related args
+arg_parser.add_argument('--lr', default=1e-4, type=float, help='learning rate')
+arg_parser.add_argument('--total_steps', default=10000, type=int, help='number of step to decay lr in')
+# training related args
+arg_parser.add_argument('--num_epochs', default=100, type=int, help='number of epochs')
+arg_parser.add_argument('--print_freq', default=10, type=int, help='frequency of logging')
+# model related args
+arg_parser.add_argument('--image_size', default=36, type=int, help='resize image to')
+arg_parser.add_argument('--hidden_size', default=516, type=int, help='number of hidden nodes')
+arg_parser.add_argument('--num_heads', default=6, type=int, help='number of attention head')
+arg_parser.add_argument('--attention_size', default=516, type=int, help='hidden size of attention fc')
+arg_parser.add_argument('--num_mlp_layers', default=2, type=int, help='number of fc layers in mlp')
+arg_parser.add_argument('--num_encoder_layers', default=6, type=int, help='number of encoders')
+arg_parser.add_argument('--dropout', default=.2, type=float, help='dropout rate')
+arg_parser.add_argument('--div_term', default=3, type=int, help='div_term^2 is number of tiles')
+
+arg = arg_parser.parse_args()
+
+main(arg)
