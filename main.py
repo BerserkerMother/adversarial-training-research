@@ -7,6 +7,8 @@ from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 from torch.cuda import amp
 
+import os
+
 from models.transformer import TransformerEncoder
 from optimizer.optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
 from data.transform import ToTiles
@@ -41,7 +43,7 @@ def main():
 
     network = TransformerEncoder().to(device)
     optimizer = torch.optim.Adam(network.parameters(), lr=1e-4)
-    scheduler = Cosine_Warmup_Wrapper(optimizer=optimizer, lr=1e-3)
+    scheduler = Cosine_Warmup_Wrapper(optimizer=optimizer, lr=1e-4)
     scaler = amp.GradScaler()
 
     num_parameters = sum(p.numel() for p in network.parameters() if p.requires_grad)
@@ -51,7 +53,16 @@ def main():
     num_epochs = 100
     print_freq = 10
 
-    for i in range(num_epochs):
+    e = 0
+    if os.path.exists('./checkpoint.pth'):
+        checkpoint = torch.load('./checkpoint.pth')
+        network.load_state_dict(checkpoint['state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        scheduler.load_state_dict(checkpoint['scheduler'])
+        scaler.load_state_dict(checkpoint['scaler'])
+        e = checkpoint['epoch']
+
+    for i in range(e, num_epochs):
         network.train()
         total_loss = 0.
         for k, (images, targets) in enumerate(data_loader):
@@ -80,6 +91,8 @@ def main():
         checkpoint = {
             'state_dict': network.state_dict(),
             'optimizer': optimizer.state_dict(),
+            'scheduler': scheduler.state_dict(),
+            'scaler': scaler.state_dict(),
             'epoch': i,
             'acc': test_accuracy
         }
