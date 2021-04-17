@@ -2,18 +2,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torchvision.models import resnet
 
 import math
-from copy import deepcopy
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, image_size: int = 36, hidden_size: int = 768,
-                 num_head: int = 12, attention_size: int = 768,
-                 num_mlp_layers: int = 2, num_encoder_layers: int = 12,
-                 dropout: float = .2, num_classes: int = 10, div_term: int = 3):
+    def __init__(self, image_size: int = 36, hidden_size: int = 516,
+                 num_head: int = 6, attention_size: int = 516,
+                 num_encoder_layers: int = 6, dropout: float = .4,
+                 num_classes: int = 10, div_term: int = 3):
         super(TransformerEncoder, self).__init__()
         self.model_name = "ViT AKA image transformer"
 
@@ -22,12 +22,8 @@ class TransformerEncoder(nn.Module):
         self.num_head = num_head
         self.attention_size = attention_size
         self.dropout = dropout
-        self.num_mlp_layers = num_mlp_layers
         self.num_encoder_layers = num_encoder_layers
         self.num_classes = num_classes
-
-        # list to store attention weights for visualizing purposes
-        self.attn_weights = []
 
         # check to see if we can break image to N tiles
         self.N = int(math.pow(div_term, 2))  # N aka number of tiles
@@ -43,21 +39,18 @@ class TransformerEncoder(nn.Module):
 
         self.embedding_dropout = nn.Dropout(p=dropout)
 
-        # define encoder layers
-        layer = TransformerEncoderLayer(input_size=self.num_input_features, hidden_size=hidden_size,
-                                        num_head=num_head, attention_size=attention_size,
-                                        num_mlp_layers=num_mlp_layers, N=self.N, dropout=dropout,
-                                        attn_weights=self.attn_weights).to(device)
-
-        encoder_layers = []
+        layers = []
         for _ in range(num_encoder_layers):
-            encoder_layers.append(deepcopy(layer))
+            # define encoder layers
+            layer = TransformerEncoderLayer(input_size=self.num_input_features, hidden_size=hidden_size,
+                                            num_head=num_head, attention_size=attention_size,
+                                            N=self.N, dropout=dropout).to(device)
+            layers.append(layer)
 
-        self.encoder_layers = nn.Sequential(*encoder_layers)
-
+        self.encoder_layers = nn.Sequential(*layers)
+        self.encoder_norm = nn.LayerNorm(hidden_size)
         # define final MLP head for classification
-        self.mlp = MLP(hidden_size=hidden_size, num_layers=num_mlp_layers, out_size=num_classes, dropout=dropout).to(
-            device)
+        self.mlp = MLP(hidden_size=hidden_size, out_size=num_classes, dropout=dropout).to(device)
 
     def forward(self, x):
         """
@@ -77,13 +70,11 @@ class TransformerEncoder(nn.Module):
         x = x + self.pos_embedding
         x = self.embedding_dropout(x)
 
-        attn_weights = []
-        for layer in self.encoder_layers:
-            x = layer(x, attn_weights)
+        x, attn_weights = self.encoder_layers((x, []))
 
-        x = self.mlp(x[0])
+        x = self.encoder_norm(x)
         # we only going to need class token output
-        x = x[:, 1, :]  # x is of size (B, 1, num_classes)
+        x = self.mlp(x[:, 0])
 
         return x.view(B, -1), attn_weights
 
@@ -91,8 +82,7 @@ class TransformerEncoder(nn.Module):
 class TransformerEncoderLayer(nn.Module):
     def __init__(self, input_size: int = 363, hidden_size: int = 768,
                  num_head: int = 12, attention_size: int = 768,
-                 num_mlp_layers: int = 2, N: int = 9, dropout: float = .2,
-                 attn_weights: list = []):
+                 num_mlp_layers: int = 2, N: int = 9, dropout: float = .2):
         super(TransformerEncoderLayer, self).__init__()
 
         self.input_size = input_size
@@ -102,24 +92,23 @@ class TransformerEncoderLayer(nn.Module):
         self.dropout = dropout
         self.num_mlp_layers = num_mlp_layers
         self.N = N
-        self.attn_weights = attn_weights  # to store attention weight across layers
 
         self.multi_head_attention = Multi_Head_Attention(hidden_size=hidden_size, num_head=num_head,
                                                          attention_size=hidden_size, dropout=dropout).to(device)
-        self.mlp = MLP(hidden_size=hidden_size, num_layers=num_mlp_layers, out_size=hidden_size, dropout=dropout).to(
+        self.mlp = MLP(hidden_size=hidden_size, out_size=hidden_size, dropout=dropout).to(
             device)
 
         self.norm1 = nn.LayerNorm(hidden_size, eps=1e-6)
         self.norm2 = nn.LayerNorm(hidden_size, eps=1e-6)
 
-    def forward(self, x, attn_weights=None):
+    def forward(self, x):
         """
 
         :param x: tuple of encoder layer input of size (B, N, hidden_size) & list of attention weights
         :return:
         """
-        if len(attn_weights) != 0:
-            x, attn_weights = x
+
+        x, attn_weights = x
 
         # attention part
         x1 = x
@@ -205,32 +194,22 @@ class Multi_Head_Attention(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, hidden_size: int, out_size: int, num_layers: int, dropout: float):
+    def __init__(self, hidden_size: int, out_size: int, dropout: float):
         super(MLP, self).__init__()
 
-        fc_layers = []
-        self.num_layers = num_layers
-
-        for _ in range(num_layers - 1):
-            fc_layers.append(nn.Linear(hidden_size, hidden_size).to(device))
-            fc_layers.append(nn.GELU())
-            fc_layers.append(nn.Dropout(p=dropout))
-
-        self.fc_layers = nn.Sequential(*fc_layers)
-
-        self.fc_last = nn.Linear(hidden_size, out_size)
-        self.drop_last = nn.Dropout(p=dropout)
+        self.fc1 = nn.Linear(hidden_size, 4 * hidden_size)
+        self.drop1 = nn.Dropout(p=dropout)
+        self.fc2 = nn.Linear(4 * hidden_size, out_size)
+        self.drop2 = nn.Dropout(p=dropout)
 
         self.init_weights()
 
     def init_weights(self):
-        for module in self.fc_layers.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.normal_(module.bias, std=1e-6)
+        nn.init.xavier_uniform_(self.fc1.weight)
+        nn.init.normal_(self.fc1.bias, std=1e-6)
 
-        nn.init.xavier_uniform_(self.fc_last.weight)
-        nn.init.normal_(self.fc_last.bias, std=1e-6)
+        nn.init.xavier_uniform_(self.fc2.weight)
+        nn.init.normal_(self.fc2.bias, std=1e-6)
 
     def forward(self, x: Tensor):
         """
@@ -239,7 +218,8 @@ class MLP(nn.Module):
         :return:
         """
 
-        x = self.fc_layers(x)
-        x = self.fc_last(x)
-        x = self.drop_last(x)
+        x = F.gelu(self.fc1(x))
+        x = self.drop1(x)
+        x = self.fc2(x)
+        x = self.drop2(x)
         return x
