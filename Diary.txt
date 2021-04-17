@@ -1,1 +1,2 @@
 We Started out work by visualizing transformer multi-head attention, lets see where the tides take us!! 
+its funny because it took me 1 day to write the code but its taking me forever to fix this overfitting problem! April 16, 12:45

@@ -18,15 +18,26 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 def main(args):
-    T = [
+    train_transform = [
+        transforms.RandomResizedCrop((args.image_size, args.image_size)),
+        transforms.RandomHorizontalFlip(p=0.2),
         transforms.Resize(args.image_size),
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)),
         ToTiles(image_size=args.image_size, num_tile=args.div_term * args.div_term)
     ]
 
-    data = datasets.CIFAR10(root=args.data, train=True, download=True, transform=transforms.Compose(T))
-    data_test = datasets.CIFAR10(root=args.data, train=False, download=True, transform=transforms.Compose(T))
+    test_transform = [
+        transforms.Resize(args.image_size),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)),
+        ToTiles(image_size=args.image_size, num_tile=args.div_term * args.div_term)
+    ]
+
+    data = datasets.CIFAR10(root=args.data, train=True, download=True,
+                            transform=transforms.Compose(train_transform))
+    data_test = datasets.CIFAR10(root=args.data, train=False, download=True,
+                                 transform=transforms.Compose(test_transform))
 
     data_loader = DataLoader(
         data,
@@ -43,9 +54,8 @@ def main(args):
     )
 
     network = TransformerEncoder(image_size=args.image_size, hidden_size=args.hidden_size, num_head=args.num_heads,
-                                 attention_size=args.attention_size, num_mlp_layers=args.num_mlp_layers,
-                                 num_encoder_layers=args.num_encoder_layers, dropout=args.dropout,
-                                 num_classes=10, div_term=args.div_term).to(device)
+                                 attention_size=args.attention_size, num_encoder_layers=args.num_encoder_layers,
+                                 dropout=args.dropout, num_classes=10, div_term=args.div_term).to(device)
     print(network)
     optimizer = torch.optim.Adam(network.parameters(), lr=args.lr)
     scheduler = Cosine_Warmup_Wrapper(optimizer=optimizer, lr=args.lr, total_steps=args.total_steps)
@@ -63,13 +73,11 @@ def main(args):
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
         scaler.load_state_dict(checkpoint['scaler'])
-        e = checkpoint['epoch']
+        e = checkpoint['epoch'] + 1
 
     for i in range(e, args.num_epochs):
-        train(args, network=network, data_loader=data_loader, optimizer=optimizer,
-              scaler=scaler, scheduler=scheduler, data=data, e=e)
-
-        accuracy_train = evaluate(network, data_loader)
+        accuracy_train = train(args, network=network, data_loader=data_loader, optimizer=optimizer,
+                               scaler=scaler, scheduler=scheduler, data=data, e=i)
         test_accuracy = evaluate(network, test_loader)
         checkpoint = {
             'state_dict': network.state_dict(),
@@ -88,30 +96,32 @@ def main(args):
 
 def train(args, network, data_loader, optimizer, scaler, scheduler, data, e):
     network.train()
-    total_loss = 0.
-    for i in range(e, args.num_epochs):
-        network.train()
-        total_loss = 0.
-        for k, (images, targets) in enumerate(data_loader):
-            B = data_loader.batch_size
-            images, targets = images.to(device), targets.to(device)
+    total_loss, correct, total_num = 0., 0., 0
+    for k, (images, targets) in enumerate(data_loader):
+        B = data_loader.batch_size
+        images, targets = images.to(device), targets.to(device)
 
-            with amp.autocast():
-                outputs, _ = network(images)
-                loss = F.cross_entropy(outputs, targets)
+        with amp.autocast():
+            outputs, _ = network(images)
+            loss = F.cross_entropy(outputs, targets)
 
-            optimizer.zero_grad()
-            scaler.scale(loss).backward()
-            scheduler.step()
-            scaler.step(optimizer)
-            scaler.update()
+        optimizer.zero_grad()
+        scaler.scale(loss).backward()
+        scheduler.step()
+        scaler.step(optimizer)
+        scaler.update()
 
-            total_loss += loss.item()
+        total_loss += loss.item()
 
-            if k % args.print_freq == 0 and k != 0:
-                print("Epoch %2d [%4d/%4d] | Loss: %3.4f | lr: %.6f"
-                      % (i, k, len(data) / B, total_loss, scheduler.get_current_lr()[0]))
-                total_loss = 0
+        total_num += images.size(0)
+        correct += (outputs.max(1)[1] == targets).sum()
+
+        if k % args.print_freq == 0 and k != 0:
+            print("Epoch %2d [%4d/%4d] | Loss: %3.4f | lr: %.6f"
+                  % (e, k, len(data) / B, total_loss, scheduler.get_current_lr()[0]))
+            total_loss = 0
+
+    return correct / total_num
 
 
 def evaluate(network, loader):
@@ -142,11 +152,10 @@ arg_parser.add_argument('--num_epochs', default=100, type=int, help='number of e
 arg_parser.add_argument('--print_freq', default=10, type=int, help='frequency of logging')
 # model related args
 arg_parser.add_argument('--image_size', default=36, type=int, help='resize image to')
-arg_parser.add_argument('--hidden_size', default=516, type=int, help='number of hidden nodes')
-arg_parser.add_argument('--num_heads', default=6, type=int, help='number of attention head')
-arg_parser.add_argument('--attention_size', default=516, type=int, help='hidden size of attention fc')
-arg_parser.add_argument('--num_mlp_layers', default=2, type=int, help='number of fc layers in mlp')
-arg_parser.add_argument('--num_encoder_layers', default=6, type=int, help='number of encoders')
+arg_parser.add_argument('--hidden_size', default=768, type=int, help='number of hidden nodes')
+arg_parser.add_argument('--num_heads', default=12, type=int, help='number of attention head')
+arg_parser.add_argument('--attention_size', default=768, type=int, help='hidden size of attention fc')
+arg_parser.add_argument('--num_encoder_layers', default=12, type=int, help='number of encoders')
 arg_parser.add_argument('--dropout', default=.2, type=float, help='dropout rate')
 arg_parser.add_argument('--div_term', default=3, type=int, help='div_term^2 is number of tiles')
 
