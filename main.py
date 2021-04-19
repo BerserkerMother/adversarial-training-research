@@ -12,7 +12,6 @@ import argparse
 
 from models.transformer import TransformerEncoder
 from optimizer.optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
-from data.transform import ToTiles
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -20,18 +19,15 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 def main(args):
     train_transform = [
         transforms.RandomResizedCrop((args.image_size, args.image_size)),
-        transforms.RandomHorizontalFlip(p=0.2),
         transforms.Resize(args.image_size),
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)),
-        ToTiles(image_size=args.image_size, num_tile=args.div_term * args.div_term)
     ]
 
     test_transform = [
         transforms.Resize(args.image_size),
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)),
-        ToTiles(image_size=args.image_size, num_tile=args.div_term * args.div_term)
     ]
 
     data = datasets.CIFAR10(root=args.data, train=True, download=True,

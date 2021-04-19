@@ -113,7 +113,7 @@ class Cosine_Warmup_Wrapper:
         scale = self.get_lr_scale()
 
         for param_group in self.optimizer.param_groups:
-            param_group['lr'] = self.init_lr * scale
+            param_group['lr'] = self.init_lr * max(scale, .01)
 
         self.current_step += 1
 
