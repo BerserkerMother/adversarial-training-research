@@ -27,17 +27,11 @@ class TransformerEncoder(nn.Module):
 
         # check to see if we can break image to N tiles
         self.N = int(math.pow(div_term, 2))  # N aka number of tiles
-        assert image_size % self.N == 0
+        assert image_size % div_term == 0
         self.num_input_features = int(math.pow(image_size / div_term, 2)) * 3
 
-        # Define embedding linear projection
-        self.embedding = nn.Linear(self.num_input_features, hidden_size)
-        # Define learnable positional embeddings of size (N+1), hidden_size
-        self.pos_embedding = nn.Parameter(torch.zeros((1, self.N + 1, hidden_size)))
-        # define class learnable class token
-        self.cls_token = nn.Parameter(torch.zeros((1, 1, hidden_size)))
-
-        self.embedding_dropout = nn.Dropout(p=dropout)
+        self.embedding = Embedding(image_size=image_size, hidden_size=hidden_size,
+                                   div_term=div_term, dropout=dropout)
 
         layers = []
         for _ in range(num_encoder_layers):
@@ -48,7 +42,7 @@ class TransformerEncoder(nn.Module):
             layers.append(layer)
 
         self.encoder_layers = nn.Sequential(*layers)
-        self.encoder_norm = nn.LayerNorm(hidden_size)
+        self.encoder_norm = nn.LayerNorm(hidden_size, eps=1e-6)
         # define final MLP head for classification
         self.mlp = MLP(hidden_size=hidden_size, out_size=num_classes, dropout=dropout).to(device)
 
@@ -60,15 +54,9 @@ class TransformerEncoder(nn.Module):
         """
 
         B = x.size(0)
-        cls_token = self.cls_token.expand(B, 1, self.hidden_size)
 
         # apply embedding to image
         x = self.embedding(x)
-        # cat class token
-        x = torch.cat([cls_token, x], dim=1)
-        # apply positional embedding
-        x = x + self.pos_embedding
-        x = self.embedding_dropout(x)
 
         x, attn_weights = self.encoder_layers((x, []))
 
@@ -76,7 +64,7 @@ class TransformerEncoder(nn.Module):
         # we only going to need class token output
         x = self.mlp(x[:, 0])
 
-        return x.view(B, -1), attn_weights
+        return x, attn_weights
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -126,6 +114,48 @@ class TransformerEncoderLayer(nn.Module):
         return x, attn_weights
 
 
+class Embedding(nn.Module):
+    def __init__(self, image_size: int = 36, hidden_size: int = 768, div_term: int = 3, dropout: float = .2):
+        """contain of patch and positional embedding, also adds cls token to input"""
+        super(Embedding, self).__init__()
+        self.image_size = image_size
+        self.hidden_size = hidden_size
+        self.div_term = div_term
+        self.patch_size = int(image_size / div_term)
+        self.N = div_term * div_term
+
+        assert image_size % div_term == 0, "can't divide picture by div term"
+
+        # use a convolution layer for patch embedding
+        self.patch_embedding = nn.Conv2d(3, hidden_size, kernel_size=self.patch_size, stride=self.patch_size)
+        self.pos_embedding = nn.Parameter(torch.zeros((1, self.N + 1, hidden_size)))
+        # cls token
+        self.cls_token = nn.Parameter(torch.zeros((1, 1, hidden_size)))
+
+        self.embedding_dropout = nn.Dropout(p=dropout)
+
+    def forward(self, x: Tensor) -> Tensor:
+        """
+
+        :param x: tensor of shape (B, C, H, W)
+        :return: tensor of shape(B, N, P*P*C)
+        """
+        B = x.size(0)
+
+        x = self.patch_embedding(x)
+        x = x.flatten(2)
+        x = x.transpose(1, 2)
+
+        cls_token = self.cls_token.expand(B, 1, self.hidden_size)
+        x = torch.cat([cls_token, x], dim=1)
+
+        x = x + self.pos_embedding
+
+        x = self.embedding_dropout(x)
+
+        return x
+
+
 class Multi_Head_Attention(nn.Module):
     def __init__(self, hidden_size: int, num_head: int, attention_size: int, dropout: float):
         super(Multi_Head_Attention, self).__init__()
@@ -146,7 +176,7 @@ class Multi_Head_Attention(nn.Module):
         self.attention_dropout = nn.Dropout(p=dropout)
         self.projection_dropout = nn.Dropout(p=dropout)
 
-        self.init_weights()
+        # self.init_weights()
 
     def forward(self, x: Tensor):
         """
