@@ -1,2 +1,1 @@
-# bachelor-project
-this is my bachelor research on transformer vision
+# Adversarial Training and Attention Visualization for Vision Transformer Model
