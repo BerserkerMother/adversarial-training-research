@@ -10,9 +10,9 @@ from torch.cuda import amp
 import os
 import argparse
 
-from models import TransformerEncoder
-from optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
-from attack_algo import PGD_normal
+from ..models import TransformerEncoder
+from ..optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
+from .attack_algo import PGD_normal
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -99,15 +99,15 @@ def train(args, network, data_loader, optimizer, scaler, scheduler, data, e):
         images, targets = images.to(device), targets.to(device)
 
         with amp.autocast():
-            criterion=F.cross_entropy()
+            criterion = F.cross_entropy()
             input_adv = PGD_normal(images, criterion,
-                               y=targets,
-                               eps=(8 / 255),
-                               model=network,
-                               steps=10,
-                               gamma=(2 / 255),
-                               randinit=True) 
-            input_adv=input_adv.to(device)
+                                   y=targets,
+                                   eps=(8 / 255),
+                                   model=network,
+                                   steps=10,
+                                   gamma=(2 / 255),
+                                   randinit=True)
+            input_adv = input_adv.to(device)
             outputs, _ = network(input_adv)
             loss = F.cross_entropy(outputs, targets)
 
@@ -136,17 +136,17 @@ def evaluate(network, loader):
     num = 0
     with torch.no_grad():
         for images, targets in loader:
-            criterion=F.cross_entropy()
+            criterion = F.cross_entropy()
             B = images.size(0)
             images, targets = images.to(device), targets.to(device)
             input_adv = PGD_normal(images, criterion,
-                               y=targets,
-                               eps=(8 / 255),
-                               model=network,
-                               steps=10,
-                               gamma=(2 / 255),
-                               randinit=True)
-            input_adv=input_adv.to(device)
+                                   y=targets,
+                                   eps=(8 / 255),
+                                   model=network,
+                                   steps=10,
+                                   gamma=(2 / 255),
+                                   randinit=True)
+            input_adv = input_adv.to(device)
             outputs, _ = network(input_adv)
             correct += (outputs.max(1)[1] == targets).sum()
             num += B
@@ -154,7 +154,6 @@ def evaluate(network, loader):
     return correct / num
 
 
-    
 arg_parser = argparse.ArgumentParser(description='ViT model and Attention visualization')
 # data related args
 arg_parser.add_argument('--data', default='./cifar-10', type=str, help='path to dataset')
