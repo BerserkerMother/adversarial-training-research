@@ -10,9 +10,9 @@ from torch.cuda import amp
 import os
 import argparse
 
-from ..models import TransformerEncoder
-from ..optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
-from .attack_algo import PGD_normal
+from models import TransformerEncoder
+from optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
+from attack_algo import PGD_normal
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -53,14 +53,14 @@ def main(args):
     network = TransformerEncoder(image_size=args.image_size, hidden_size=args.hidden_size, num_head=args.num_heads,
                                  attention_size=args.attention_size, num_encoder_layers=args.num_encoder_layers,
                                  dropout=args.dropout, num_classes=10, patch_size=args.patch_size).to(device)
-    print(network)
+    #print(network)
     optimizer = torch.optim.SGD(network.parameters(), lr=args.lr, momentum=0.9)
     scheduler = Cosine_Warmup_Wrapper(optimizer=optimizer, lr=args.lr, total_steps=args.total_steps)
     scaler = amp.GradScaler()
 
     num_parameters = sum(p.numel() for p in network.parameters() if p.requires_grad)
     num_parameters /= 1000000
-
+    
     print("Number of parameters %dM" % num_parameters)
 
     e = 0
@@ -85,7 +85,7 @@ def main(args):
             'acc': test_accuracy
         }
 
-        torch.save(checkpoint, './checkpoint.pth')
+        torch.save(checkpoint, '/content/drive/MyDrive/adversarial-training-research-main/checkpoint.pth')
 
         print('Epoch %d, train accuracy: %.2f%% | test accuracy: %.2f%%'
               % (i, accuracy_train * 100, test_accuracy * 100))
@@ -99,18 +99,18 @@ def train(args, network, data_loader, optimizer, scaler, scheduler, data, e):
         images, targets = images.to(device), targets.to(device)
 
         with amp.autocast():
-            criterion = F.cross_entropy()
-            input_adv = PGD_normal(images, criterion,
-                                   y=targets,
-                                   eps=(8 / 255),
-                                   model=network,
-                                   steps=10,
-                                   gamma=(2 / 255),
-                                   randinit=True)
-            input_adv = input_adv.to(device)
+            
+            input_adv = PGD_normal(images,
+                               y=targets,
+                               eps=(8 / 255),
+                               model=network,
+                               steps=10,
+                               gamma=(2 / 255),
+                               randinit=True) 
+            input_adv=input_adv.to(device)
             outputs, _ = network(input_adv)
             loss = F.cross_entropy(outputs, targets)
-
+            
         optimizer.zero_grad()
         scaler.scale(loss).backward()
         scheduler.step()
@@ -131,29 +131,29 @@ def train(args, network, data_loader, optimizer, scaler, scheduler, data, e):
 
 
 def evaluate(network, loader):
-    network.eval()
-    correct = 0.
-    num = 0
-    with torch.no_grad():
+        network.eval()
+        correct = 0.
+        num = 0
         for images, targets in loader:
-            criterion = F.cross_entropy()
             B = images.size(0)
             images, targets = images.to(device), targets.to(device)
-            input_adv = PGD_normal(images, criterion,
-                                   y=targets,
-                                   eps=(8 / 255),
-                                   model=network,
-                                   steps=10,
-                                   gamma=(2 / 255),
-                                   randinit=True)
-            input_adv = input_adv.to(device)
-            outputs, _ = network(input_adv)
+            input_adv = PGD_normal(images,
+                               y=targets,
+                               eps=(8 / 255),
+                               model=network,
+                               steps=20,
+                               gamma=(2 / 255),
+                               randinit=True)
+            with torch.no_grad():                   
+                 input_adv=input_adv.to(device)
+                 outputs, _ = network(input_adv)
             correct += (outputs.max(1)[1] == targets).sum()
             num += B
 
-    return correct / num
+            return correct / num
+ 
 
-
+    
 arg_parser = argparse.ArgumentParser(description='ViT model and Attention visualization')
 # data related args
 arg_parser.add_argument('--data', default='./cifar-10', type=str, help='path to dataset')
