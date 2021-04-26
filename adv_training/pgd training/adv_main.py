@@ -10,8 +10,8 @@ from torch.cuda import amp
 import os
 import argparse
 
-from models import TransformerEncoder
-from optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
+from adv_training.models import TransformerEncoder
+from adv_training.optimizer import Linear_Warmup_Wrapper, ScheduledOptim, Cosine_Warmup_Wrapper
 from attack_algo import PGD_normal
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
